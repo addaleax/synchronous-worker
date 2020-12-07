@@ -18,6 +18,7 @@ class Worker {
   static void Load(const FunctionCallbackInfo<Value>& args);
   static void RunLoop(const FunctionCallbackInfo<Value>& args);
   static void IsLoopAlive(const FunctionCallbackInfo<Value>& args);
+  static void SignalStop(const FunctionCallbackInfo<Value>& args);
   static void Stop(const FunctionCallbackInfo<Value>& args);
 
  private:
@@ -25,16 +26,18 @@ class Worker {
   static void CleanupHook(void* arg);
   void OnExit(int code);
 
-  void Start(bool own_loop);
+  void Start(bool own_loop, bool own_microtaskqueue);
   MaybeLocal<Value> Load(Local<Function> callback);
   void RunLoop(uv_run_mode mode);
   bool IsLoopAlive();
+  void SignalStop();
   void Stop(bool may_throw);
 
   Isolate* isolate_;
   Global<Object> wrap_;
 
   uv_loop_t loop_;
+  std::unique_ptr<v8::MicrotaskQueue> microtask_queue_;
   Global<Context> outer_context_;
   Global<Context> context_;
   IsolateData* isolate_data_ = nullptr;
@@ -71,13 +74,21 @@ void Worker::New(const FunctionCallbackInfo<Value>& args) {
 void Worker::Start(const FunctionCallbackInfo<Value>& args) {
   Worker* self = Unwrap(args);
   if (self == nullptr) return;
-  self->Start(args[0]->BooleanValue(args.GetIsolate()));
+  self->Start(
+      args[0]->BooleanValue(args.GetIsolate()),
+      args[1]->BooleanValue(args.GetIsolate()));
 }
 
 void Worker::Stop(const FunctionCallbackInfo<Value>& args) {
   Worker* self = Unwrap(args);
   if (self == nullptr) return;
   self->Stop(true);
+}
+
+void Worker::SignalStop(const FunctionCallbackInfo<Value>& args) {
+  Worker* self = Unwrap(args);
+  if (self == nullptr) return;
+  self->SignalStop();
 }
 
 void Worker::Load(const FunctionCallbackInfo<Value>& args) {
@@ -111,7 +122,7 @@ void Worker::IsLoopAlive(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(self->IsLoopAlive());
 }
 
-void Worker::Start(bool own_loop) {
+void Worker::Start(bool own_loop, bool own_microtaskqueue) {
   Environment* outer_env = GetCurrentEnvironment(outer_context_.Get(isolate_));
   assert(outer_env != nullptr);
   uv_loop_t* outer_loop = GetCurrentEventLoop(isolate_);
@@ -126,24 +137,31 @@ void Worker::Start(bool own_loop) {
     loop_.data = this;
   }
 
-  Local<Context> context = NewContext(isolate_);
-  if (context.IsEmpty()) {
+  MicrotaskQueue* microtask_queue =
+      own_microtaskqueue ?
+      (microtask_queue_ = v8::MicrotaskQueue::New(
+          isolate_, v8::MicrotasksPolicy::kExplicit)).get() :
+      outer_context_.Get(isolate_)->GetMicrotaskQueue();
+
+  Local<Context> context = Context::New(
+      isolate_,
+      nullptr /* extensions */,
+      MaybeLocal<ObjectTemplate>() /* global_template */,
+      MaybeLocal<Value>() /* global_value */,
+      DeserializeInternalFieldsCallback() /* internal_fields_deserializer */,
+      microtask_queue);
+  if (context.IsEmpty() || !InitializeContext(context)) {
     return;
   }
 
   context_.Reset(isolate_, context);
   Context::Scope context_scope(context);
-  // There should be a way to get the parent Environment -> IsolateData connection.
-  isolate_data_ = CreateIsolateData(
-      isolate_,
-      own_loop ? &loop_ : outer_loop,
-      GetMultiIsolatePlatform(outer_env));
   assert(isolate_data_ != nullptr);
   ThreadId thread_id = AllocateEnvironmentThreadId();
   auto inspector_parent_handle = GetInspectorParentHandle(
       outer_env, thread_id, "file:///synchronous-worker.js");
   env_ = CreateEnvironment(
-      isolate_data_,
+      GetEnvironmentIsolateData(outer_env),
       context,
       {},
       {},
@@ -172,13 +190,18 @@ void Worker::OnExit(int code) {
   USE(onexit_v.As<Function>()->Call(outer_context, self, 1, args));
 }
 
+void Worker::SignalStop() {
+  if (env_ != nullptr) {
+    node::Stop(env_);
+    isolate_->CancelTerminateExecution();
+  }
+}
+
 void Worker::Stop(bool may_throw) {
   if (env_ != nullptr) {
-    Environment* env = env_;
+    SignalStop();
+    FreeEnvironment(env_);
     env_ = nullptr;
-    node::Stop(env);
-    isolate_->CancelTerminateExecution();
-    FreeEnvironment(env);
   }
   if (isolate_data_ != nullptr) {
     FreeIsolateData(isolate_data_);
@@ -193,6 +216,7 @@ void Worker::Stop(bool may_throw) {
       isolate_->ThrowException(UVException(isolate_, ret, "uv_loop_close"));
     }
   }
+  microtask_queue_.reset();
 }
 
 MaybeLocal<Value> Worker::Load(Local<Function> callback) {
@@ -206,8 +230,12 @@ MaybeLocal<Value> Worker::Load(Local<Function> callback) {
   Local<Context> context = context_.Get(isolate_);
   Context::Scope context_scope(context);
   return LoadEnvironment(env_, [&](const StartExecutionCallbackInfo& info) {
-    Local<Value> argv[] = { info.process_object, info.native_require };
-    return callback->Call(context, Null(isolate_), 2, argv);
+    Local<Value> argv[] = {
+      info.process_object,
+      info.native_require,
+      context->Global()
+    };
+    return callback->Call(context, Null(isolate_), 3, argv);
   });
 };
 
@@ -228,6 +256,9 @@ void Worker::CleanupHook(void* arg) {
 
 void Worker::RunLoop(uv_run_mode mode) {
   if (loop_.data == nullptr) return;
+  HandleScope handle_scope(isolate_);
+  Context::Scope context_scope(context_.Get(isolate_));
+  SealHandleScope seal_handle_scope(isolate_);
   uv_run(&loop_, mode);
 }
 
@@ -250,6 +281,8 @@ NODE_MODULE_INIT() {
              FunctionTemplate::New(isolate, Worker::Load, {}, s));
   proto->Set(String::NewFromUtf8Literal(isolate, "stop"),
              FunctionTemplate::New(isolate, Worker::Stop, {}, s));
+  proto->Set(String::NewFromUtf8Literal(isolate, "signalStop"),
+             FunctionTemplate::New(isolate, Worker::SignalStop, {}, s));
   proto->Set(String::NewFromUtf8Literal(isolate, "runLoop"),
              FunctionTemplate::New(isolate, Worker::RunLoop, {}, s));
   proto->Set(String::NewFromUtf8Literal(isolate, "isLoopAlive"),
