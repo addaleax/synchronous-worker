@@ -21,6 +21,20 @@ class Worker {
   static void Stop(const FunctionCallbackInfo<Value>& args);
   static void RunInCallbackScope(const FunctionCallbackInfo<Value>& args);
 
+  struct WorkerScope : public EscapableHandleScope,
+                       public Context::Scope,
+                       public Isolate::SafeForTerminationScope {
+   public:
+    explicit WorkerScope(Worker* w);
+    ~WorkerScope();
+
+   private:
+    Worker* w_;
+    bool orig_can_be_terminated_;
+  };
+
+  Local<Context> context() const;
+
  private:
   static Worker* Unwrap(const FunctionCallbackInfo<Value>& arg);
   static void CleanupHook(void* arg);
@@ -44,7 +58,25 @@ class Worker {
   IsolateData* isolate_data_ = nullptr;
   Environment* env_ = nullptr;
   bool signaled_stop_ = false;
+  bool can_be_terminated_ = false;
 };
+
+Worker::WorkerScope::WorkerScope(Worker* w)
+  : EscapableHandleScope(w->isolate_),
+    Scope(w->context()),
+    SafeForTerminationScope(w->isolate_),
+    w_(w),
+    orig_can_be_terminated_(w->can_be_terminated_) {
+  w_->can_be_terminated_ = true;
+}
+
+Worker::WorkerScope::~WorkerScope() {
+  w_->can_be_terminated_ = orig_can_be_terminated_;
+}
+
+Local<Context> Worker::context() const {
+  return context_.Get(isolate_);
+}
 
 Worker::Worker(Isolate* isolate, Local<Object> wrap)
   : isolate_(isolate), wrap_(isolate, wrap) {
@@ -147,11 +179,13 @@ MaybeLocal<Value> Worker::RunInCallbackScope(Local<Function> fn) {
         String::NewFromUtf8Literal(isolate_, "Worker has been stopped")));
     return MaybeLocal<Value>();
   }
-  Local<Context> context = context_.Get(isolate_);
-  Context::Scope context_scope(context);
-  Isolate::SafeForTerminationScope termination_scope(isolate_);
+  WorkerScope worker_scope(this);
   CallbackScope callback_scope(isolate_, wrap_.Get(isolate_), { 1, 0 });
-  return fn->Call(context, Null(isolate_), 0, nullptr);
+  MaybeLocal<Value> ret = fn->Call(context(), Null(isolate_), 0, nullptr);
+  if (signaled_stop_) {
+    isolate_->CancelTerminateExecution();
+  }
+  return worker_scope.EscapeMaybe(ret);
 }
 
 void Worker::Start(bool own_loop, bool own_microtaskqueue) {
@@ -230,11 +264,12 @@ void Worker::OnExit(int code) {
   }
   Local<Value> args[] = { Integer::New(isolate_, code) };
   USE(onexit_v.As<Function>()->Call(outer_context, self, 1, args));
+  SignalStop();
 }
 
 void Worker::SignalStop() {
   signaled_stop_ = true;
-  if (env_ != nullptr) {
+  if (env_ != nullptr && can_be_terminated_) {
     node::Stop(env_);
   }
 }
@@ -280,17 +315,16 @@ MaybeLocal<Value> Worker::Load(Local<Function> callback) {
     return MaybeLocal<Value>();
   }
 
-  Local<Context> context = context_.Get(isolate_);
-  Context::Scope context_scope(context);
-  Isolate::SafeForTerminationScope termination_scope(isolate_);
-  return LoadEnvironment(env_, [&](const StartExecutionCallbackInfo& info) {
-    Local<Value> argv[] = {
-      info.process_object,
-      info.native_require,
-      context->Global()
-    };
-    return callback->Call(context, Null(isolate_), 3, argv);
-  });
+  WorkerScope worker_scope(this);
+  return worker_scope.EscapeMaybe(
+      LoadEnvironment(env_, [&](const StartExecutionCallbackInfo& info) {
+        Local<Value> argv[] = {
+          info.process_object,
+          info.native_require,
+          context()->Global()
+        };
+        return callback->Call(context(), Null(isolate_), 3, argv);
+      }));
 };
 
 void Worker::CleanupHook(void* arg) {
@@ -298,13 +332,15 @@ void Worker::CleanupHook(void* arg) {
 }
 
 void Worker::RunLoop(uv_run_mode mode) {
-  if (loop_.data == nullptr || signaled_stop_) return;
-  HandleScope handle_scope(isolate_);
-  Context::Scope context_scope(context_.Get(isolate_));
+  if (loop_.data == nullptr || context_.IsEmpty() || signaled_stop_) {
+    isolate_->ThrowException(Exception::Error(
+        String::NewFromUtf8Literal(isolate_, "Worker has been stopped")));
+    return;
+  }
+  WorkerScope worker_scope(this);
   SealHandleScope seal_handle_scope(isolate_);
-  Isolate::SafeForTerminationScope termination_scope(isolate_);
   uv_run(&loop_, mode);
-  if (isolate_->IsExecutionTerminating() && signaled_stop_) {
+  if (signaled_stop_) {
     isolate_->CancelTerminateExecution();
   }
 }

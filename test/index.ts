@@ -95,4 +95,55 @@ describe('SynchronousWorker allows running Node.js code', () => {
     assert.strictEqual(fetched.ok, true);
     assert.strictEqual(fetched.status, 200);
   });
+
+  context('process.exit', () => {
+    it('interrupts runInCallbackScope', () => {
+      const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+      let ranBefore = false;
+      let ranAfter = false;
+      let observedCode = -1;
+      w.on('exit', (code) => observedCode = code);
+      w.runInCallbackScope(() => {
+        ranBefore = true;
+        w.process.exit(1);
+        ranAfter = true;
+      });
+      assert.strictEqual(ranBefore, true);
+      assert.strictEqual(ranAfter, false);
+      assert.strictEqual(observedCode, 1);
+    });
+
+    it('interrupts runLoop', () => {
+      const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+      let ranBefore = false;
+      let ranAfter = false;
+      let observedCode = -1;
+      w.on('exit', (code) => observedCode = code);
+      w.runInCallbackScope(() => {
+        w.globalThis.setImmediate(() => {
+          ranBefore = true;
+          w.process.exit(1);
+          ranAfter = true;
+        });
+      });
+      w.runLoop('default');
+      assert.strictEqual(ranBefore, true);
+      assert.strictEqual(ranAfter, false);
+      assert.strictEqual(observedCode, 1);
+    });
+
+    it('does not kill the process outside of any scopes', () => {
+      const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+      let observedCode = -1;
+
+      w.on('exit', (code) => observedCode = code);
+      w.process.exit(1);
+
+      assert.strictEqual(observedCode, 1);
+
+      assert.throws(() => {
+        w.runLoop('default');
+      }, /Worker has been stopped/);
+    });
+  });
 });

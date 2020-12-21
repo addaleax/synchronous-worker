@@ -14,6 +14,7 @@ const kGlobalThis = Symbol('kGlobalThis');
 const kHasOwnEventLoop = Symbol('kHasOwnEventLoop');
 const kHasOwnMicrotaskQueue = Symbol('kHasOwnMicrotaskQueue');
 const kPromiseInspector = Symbol('kPromiseInspector');
+const kStoppedPromise = Symbol('kStoppedPromise');
 
 interface Options {
   ownEventLoop: boolean;
@@ -39,6 +40,7 @@ class SynchronousWorker extends EventEmitter {
   [kHasOwnEventLoop]: boolean;
   [kHasOwnMicrotaskQueue]: boolean;
   [kPromiseInspector]: <T>(promise: Promise<T>) => InspectedPromise<T>;
+  [kStoppedPromise]: Promise<void>;
 
   constructor(options?: Partial<Options>) {
     super();
@@ -53,6 +55,15 @@ class SynchronousWorker extends EventEmitter {
     try {
       this[kHandle].start(this[kHasOwnEventLoop], this[kHasOwnMicrotaskQueue]);
       this[kHandle].load((process, nativeRequire, globalThis) => {
+        const origExit = process.reallyExit;
+        process.reallyExit = (...args) => {
+          const ret = origExit.call(process, ...args);
+          // Make a dummy call to make sure the termination exception is
+          // propagated. For some reason, this isn't necessarily the case
+          // otherwise.
+          process.memoryUsage();
+          return ret;
+        };
         this[kProcess] = process;
         this[kModule] = nativeRequire('module');
         this[kGlobalThis] = globalThis;
@@ -104,8 +115,8 @@ class SynchronousWorker extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    this[kHandle].signalStop();
-    return new Promise(resolve => {
+    return this[kStoppedPromise] ??= new Promise(resolve => {
+      this[kHandle].signalStop();
       setImmediate(() => {
         this[kHandle].stop();
         resolve();
