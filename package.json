@@ -11,8 +11,10 @@
     "node": ">= 12.19.0"
   },
   "scripts": {
-    "lint": "eslint **/*.ts bin/*.js",
-    "test": "npm run lint && npm run build && nyc mocha --colors -r ts-node/register test/*.ts",
+    "lint": "eslint {src,test}/**/*.ts",
+    "test": "npm run lint && npm run build && nyc npm run test-only",
+    "test-nolint": "npm run build && npm run test-only",
+    "test-only": "mocha --colors -r ts-node/register test/*.ts",
     "build": "node-gyp rebuild && npm run compile-ts && gen-esm-wrapper . ./.esm-wrapper.mjs",
     "prepack": "npm run build",
     "compile-ts": "tsc -p tsconfig.json"
@@ -47,6 +49,7 @@
     "eslint-plugin-standard": "^4.0.1",
     "gen-esm-wrapper": "^1.1.0",
     "mocha": "^8.1.3",
+    "node-fetch": "^2.6.1",
     "nyc": "^15.1.0",
     "ts-node": "^9.0.0",
     "typescript": "^4.0.3"

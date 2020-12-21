@@ -11,7 +11,6 @@ template <typename T> inline void USE(T&&) {}
 class Worker {
  public:
   Worker(Isolate* isolate, Local<Object> wrap);
-  ~Worker();
 
   static void New(const FunctionCallbackInfo<Value>& args);
   static void Start(const FunctionCallbackInfo<Value>& args);
@@ -20,6 +19,7 @@ class Worker {
   static void IsLoopAlive(const FunctionCallbackInfo<Value>& args);
   static void SignalStop(const FunctionCallbackInfo<Value>& args);
   static void Stop(const FunctionCallbackInfo<Value>& args);
+  static void RunInCallbackScope(const FunctionCallbackInfo<Value>& args);
 
  private:
   static Worker* Unwrap(const FunctionCallbackInfo<Value>& arg);
@@ -28,6 +28,7 @@ class Worker {
 
   void Start(bool own_loop, bool own_microtaskqueue);
   MaybeLocal<Value> Load(Local<Function> callback);
+  MaybeLocal<Value> RunInCallbackScope(Local<Function> callback);
   void RunLoop(uv_run_mode mode);
   bool IsLoopAlive();
   void SignalStop();
@@ -42,6 +43,7 @@ class Worker {
   Global<Context> context_;
   IsolateData* isolate_data_ = nullptr;
   Environment* env_ = nullptr;
+  std::atomic_bool signaled_stop_ { false };
 };
 
 Worker::Worker(Isolate* isolate, Local<Object> wrap)
@@ -60,7 +62,7 @@ Worker* Worker::Unwrap(const FunctionCallbackInfo<Value>& args) {
     Isolate* isolate = args.GetIsolate();
     isolate->ThrowException(
         Exception::Error(
-            String::NewFromUtf8Literal(isolate, "Invalid this value")));
+            String::NewFromUtf8Literal(isolate, "Invalid 'this' value")));
     return nullptr;
   }
   return static_cast<Worker*>(
@@ -89,6 +91,7 @@ void Worker::SignalStop(const FunctionCallbackInfo<Value>& args) {
   Worker* self = Unwrap(args);
   if (self == nullptr) return;
   self->SignalStop();
+  args.GetIsolate()->CancelTerminateExecution();
 }
 
 void Worker::Load(const FunctionCallbackInfo<Value>& args) {
@@ -122,8 +125,39 @@ void Worker::IsLoopAlive(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(self->IsLoopAlive());
 }
 
+void Worker::RunInCallbackScope(const FunctionCallbackInfo<Value>& args) {
+  Worker* self = Unwrap(args);
+  if (self == nullptr) return;
+  if (!args[0]->IsFunction()) {
+    self->isolate_->ThrowException(
+        Exception::TypeError(
+            String::NewFromUtf8Literal(self->isolate_,
+                "The runInCallbackScope() argument must be a function")));
+    return;
+  }
+  Local<Value> result;
+  if (self->RunInCallbackScope(args[0].As<Function>()).ToLocal(&result)) {
+    args.GetReturnValue().Set(result);
+  }
+}
+
+MaybeLocal<Value> Worker::RunInCallbackScope(Local<Function> fn) {
+  if (context_.IsEmpty() || signaled_stop_) {
+    isolate_->ThrowException(Exception::Error(
+        String::NewFromUtf8Literal(isolate_, "Worker has been stopped")));
+    return MaybeLocal<Value>();
+  }
+  Local<Context> context = context_.Get(isolate_);
+  Context::Scope context_scope(context);
+  Isolate::SafeForTerminationScope termination_scope(isolate_);
+  CallbackScope callback_scope(isolate_, wrap_.Get(isolate_), { 1, 0 });
+  return fn->Call(context, Null(isolate_), 0, nullptr);
+}
+
 void Worker::Start(bool own_loop, bool own_microtaskqueue) {
-  Environment* outer_env = GetCurrentEnvironment(outer_context_.Get(isolate_));
+  signaled_stop_ = false;
+  Local<Context> outer_context = outer_context_.Get(isolate_);
+  Environment* outer_env = GetCurrentEnvironment(outer_context);
   assert(outer_env != nullptr);
   uv_loop_t* outer_loop = GetCurrentEventLoop(isolate_);
   assert(outer_loop != nullptr);
@@ -142,6 +176,7 @@ void Worker::Start(bool own_loop, bool own_microtaskqueue) {
       (microtask_queue_ = v8::MicrotaskQueue::New(
           isolate_, v8::MicrotasksPolicy::kExplicit)).get() :
       outer_context_.Get(isolate_)->GetMicrotaskQueue();
+  uv_loop_t* loop = own_loop ? &loop_ : GetCurrentEventLoop(isolate_);
 
   Local<Context> context = Context::New(
       isolate_,
@@ -150,18 +185,24 @@ void Worker::Start(bool own_loop, bool own_microtaskqueue) {
       MaybeLocal<Value>() /* global_value */,
       DeserializeInternalFieldsCallback() /* internal_fields_deserializer */,
       microtask_queue);
+  context->SetSecurityToken(outer_context->GetSecurityToken());
   if (context.IsEmpty() || !InitializeContext(context)) {
     return;
   }
 
   context_.Reset(isolate_, context);
   Context::Scope context_scope(context);
+  isolate_data_ = CreateIsolateData(
+      isolate_,
+      loop,
+      GetMultiIsolatePlatform(outer_env),
+      GetArrayBufferAllocator(GetEnvironmentIsolateData(outer_env)));
   assert(isolate_data_ != nullptr);
   ThreadId thread_id = AllocateEnvironmentThreadId();
   auto inspector_parent_handle = GetInspectorParentHandle(
       outer_env, thread_id, "file:///synchronous-worker.js");
   env_ = CreateEnvironment(
-      GetEnvironmentIsolateData(outer_env),
+      isolate_data_,
       context,
       {},
       {},
@@ -178,9 +219,10 @@ void Worker::Start(bool own_loop, bool own_microtaskqueue) {
 
 void Worker::OnExit(int code) {
   HandleScope handle_scope(isolate_);
+  Local<Object> self = wrap_.Get(isolate_);
   Local<Context> outer_context = outer_context_.Get(isolate_);
   Context::Scope context_scope(outer_context);
-  Local<Object> self = wrap_.Get(isolate_);
+  Isolate::SafeForTerminationScope termination_scope(isolate_);
   Local<Value> onexit_v;
   if (!self->Get(outer_context, String::NewFromUtf8Literal(isolate_, "onexit"))
           .ToLocal(&onexit_v) || !onexit_v->IsFunction()) {
@@ -191,15 +233,18 @@ void Worker::OnExit(int code) {
 }
 
 void Worker::SignalStop() {
+  signaled_stop_ = true;
   if (env_ != nullptr) {
     node::Stop(env_);
-    isolate_->CancelTerminateExecution();
   }
 }
 
 void Worker::Stop(bool may_throw) {
   if (env_ != nullptr) {
-    SignalStop();
+    if (!signaled_stop_) {
+      SignalStop();
+      isolate_->CancelTerminateExecution();
+    }
     FreeEnvironment(env_);
     env_ = nullptr;
   }
@@ -217,10 +262,18 @@ void Worker::Stop(bool may_throw) {
     }
   }
   microtask_queue_.reset();
+
+  RemoveEnvironmentCleanupHook(isolate_, CleanupHook, this);
+  if (!wrap_.IsEmpty()) {
+    HandleScope handle_scope(isolate_);
+    wrap_.Get(isolate_)->SetAlignedPointerInInternalField(0, nullptr);
+  }
+  wrap_.Reset();
+  delete this;
 }
 
 MaybeLocal<Value> Worker::Load(Local<Function> callback) {
-  if (env_ == nullptr) {
+  if (env_ == nullptr || signaled_stop_) {
     isolate_->ThrowException(
         Exception::Error(
             String::NewFromUtf8Literal(isolate_, "Worker not initialized")));
@@ -229,6 +282,7 @@ MaybeLocal<Value> Worker::Load(Local<Function> callback) {
 
   Local<Context> context = context_.Get(isolate_);
   Context::Scope context_scope(context);
+  Isolate::SafeForTerminationScope termination_scope(isolate_);
   return LoadEnvironment(env_, [&](const StartExecutionCallbackInfo& info) {
     Local<Value> argv[] = {
       info.process_object,
@@ -239,31 +293,24 @@ MaybeLocal<Value> Worker::Load(Local<Function> callback) {
   });
 };
 
-Worker::~Worker() {
-  Stop(false);
-
-  RemoveEnvironmentCleanupHook(isolate_, CleanupHook, this);
-  if (!wrap_.IsEmpty()) {
-    HandleScope handle_scope(isolate_);
-    wrap_.Get(isolate_)->SetAlignedPointerInInternalField(0, nullptr);
-  }
-  wrap_.Reset();
-}
-
 void Worker::CleanupHook(void* arg) {
-  delete static_cast<Worker*>(arg);
+  static_cast<Worker*>(arg)->Stop(false);
 }
 
 void Worker::RunLoop(uv_run_mode mode) {
-  if (loop_.data == nullptr) return;
+  if (loop_.data == nullptr || signaled_stop_) return;
   HandleScope handle_scope(isolate_);
   Context::Scope context_scope(context_.Get(isolate_));
   SealHandleScope seal_handle_scope(isolate_);
+  Isolate::SafeForTerminationScope termination_scope(isolate_);
   uv_run(&loop_, mode);
+  if (isolate_->IsExecutionTerminating() && signaled_stop_) {
+    isolate_->CancelTerminateExecution();
+  }
 }
 
 bool Worker::IsLoopAlive() {
-  if (loop_.data == nullptr) return false;
+  if (loop_.data == nullptr || signaled_stop_) return false;
   return uv_loop_alive(&loop_);
 }
 
@@ -287,6 +334,8 @@ NODE_MODULE_INIT() {
              FunctionTemplate::New(isolate, Worker::RunLoop, {}, s));
   proto->Set(String::NewFromUtf8Literal(isolate, "isLoopAlive"),
              FunctionTemplate::New(isolate, Worker::IsLoopAlive, {}, s));
+  proto->Set(String::NewFromUtf8Literal(isolate, "runInCallbackScope"),
+             FunctionTemplate::New(isolate, Worker::RunInCallbackScope, {}, s));
 
   Local<Function> worker_fn;
   if (!templ->GetFunction(context).ToLocal(&worker_fn))
