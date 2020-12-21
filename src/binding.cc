@@ -43,7 +43,7 @@ class Worker {
   Global<Context> context_;
   IsolateData* isolate_data_ = nullptr;
   Environment* env_ = nullptr;
-  std::atomic_bool signaled_stop_ { false };
+  bool signaled_stop_ = false;
 };
 
 Worker::Worker(Isolate* isolate, Local<Object> wrap)
