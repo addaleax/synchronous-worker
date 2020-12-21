@@ -13,11 +13,23 @@ const kModule = Symbol('kModule');
 const kGlobalThis = Symbol('kGlobalThis');
 const kHasOwnEventLoop = Symbol('kHasOwnEventLoop');
 const kHasOwnMicrotaskQueue = Symbol('kHasOwnMicrotaskQueue');
+const kPromiseInspector = Symbol('kPromiseInspector');
 
 interface Options {
   ownEventLoop: boolean;
   ownMicrotaskQueue: boolean;
 }
+
+type InspectedPromise<T> = {
+  state: 'pending';
+  value: null;
+} | {
+  state: 'fulfilled';
+  value: T;
+} | {
+  state: 'rejected';
+  value: Error;
+};
 
 class SynchronousWorker extends EventEmitter {
   [kHandle]: any;
@@ -26,6 +38,7 @@ class SynchronousWorker extends EventEmitter {
   [kModule]: typeof Module;
   [kHasOwnEventLoop]: boolean;
   [kHasOwnMicrotaskQueue]: boolean;
+  [kPromiseInspector]: <T>(promise: Promise<T>) => InspectedPromise<T>;
 
   constructor(options?: Partial<Options>) {
     super();
@@ -58,6 +71,29 @@ class SynchronousWorker extends EventEmitter {
     if (mode === 'once') uvMode = UV_RUN_ONCE;
     if (mode === 'nowait') uvMode = UV_RUN_NOWAIT;
     this[kHandle].runLoop(uvMode);
+  }
+
+  runLoopUntilPromiseResolved<T>(promise: Promise<T>): T {
+    if (!this[kHasOwnEventLoop] || !this[kHasOwnMicrotaskQueue]) {
+      throw new Error(
+        'Can only use .runLoopUntilPromiseResolved() when using a separate event loop and microtask queue');
+    }
+    this[kPromiseInspector] ??= this.createRequire(__filename)('vm').runInThisContext(
+    `(promise => {
+      const obj = { state: 'pending', value: null };
+      promise.then((v) => { obj.state = 'fulfilled'; obj.value = v; },
+                   (v) => { obj.state = 'rejected';  obj.value = v; });
+      return obj;
+    })`);
+    const inspected = this[kPromiseInspector](promise);
+    this[kHandle].runInCallbackScope(() => {}); // Flush the µtask queue
+    while (inspected.state === 'pending') {
+      this.runLoop('once');
+    }
+    if (inspected.state === 'rejected') {
+      throw inspected.value;
+    }
+    return inspected.value;
   }
 
   get loopAlive(): boolean {

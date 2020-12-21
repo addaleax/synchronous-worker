@@ -76,4 +76,23 @@ describe('SynchronousWorker allows running Node.js code', () => {
       done();
     });
   });
+
+  it('allows waiting for a specific promise to be resolved', () => {
+    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    const req = w.createRequire(__filename);
+    let srv;
+    let serverUpPromise;
+    let fetchPromise;
+    w.runInCallbackScope(() => {
+      srv = req('http').createServer((req, res) => res.end('contents')).listen(0);
+      serverUpPromise = req('events').once(srv, 'listening');
+    });
+    w.runLoopUntilPromiseResolved(serverUpPromise);
+    w.runInCallbackScope(() => {
+      fetchPromise = req('node-fetch')('http://localhost:' + srv.address().port);
+    });
+    const fetched = w.runLoopUntilPromiseResolved(fetchPromise) as any;
+    assert.strictEqual(fetched.ok, true);
+    assert.strictEqual(fetched.status, 200);
+  });
 });
