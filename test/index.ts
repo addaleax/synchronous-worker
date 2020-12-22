@@ -146,4 +146,38 @@ describe('SynchronousWorker allows running Node.js code', () => {
       }, /Worker has been stopped/);
     });
   });
+
+  it('allows adding uncaught exception listeners', () => {
+    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    let uncaughtException;
+    let erroredOrExited = false;
+    w.on('exit', () => erroredOrExited = true);
+    w.on('errored', () => erroredOrExited = true);
+    w.process.on('uncaughtException', err => uncaughtException = err);
+    w.globalThis.setImmediate(() => { throw new Error('foobar'); });
+    w.runLoop('default');
+    assert.strictEqual(erroredOrExited, false);
+    assert.strictEqual(uncaughtException.message, 'foobar');
+  });
+
+  it('handles entirely uncaught exceptions inside the loop well', () => {
+    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    let observedCode;
+    let observedError;
+    w.on('exit', code => observedCode = code);
+    w.on('error', error => observedError = error);
+    w.globalThis.setImmediate(() => { throw new Error('foobar'); });
+    w.runLoop('default');
+    assert.strictEqual(observedCode, 1);
+    assert.strictEqual(observedError.message, 'foobar');
+  });
+
+  it('forbids nesting .runLoop() calls', () => {
+    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    let uncaughtException;
+    w.process.on('uncaughtException', err => uncaughtException = err);
+    w.globalThis.setImmediate(() => w.runLoop('default'));
+    w.runLoop('default');
+    assert.strictEqual(uncaughtException.message, 'Cannot nest calls to runLoop');
+  });
 });

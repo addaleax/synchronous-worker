@@ -67,6 +67,12 @@ class SynchronousWorker extends EventEmitter {
         this[kProcess] = process;
         this[kModule] = nativeRequire('module');
         this[kGlobalThis] = globalThis;
+        process.on('uncaughtException', (err) => {
+          if (process.listenerCount('uncaughtException') === 1) {
+            this.emit('error', err);
+            process.exit(1);
+          }
+        });
       });
     } catch (err) {
       this[kHandle].stop();

@@ -59,6 +59,7 @@ class Worker {
   Environment* env_ = nullptr;
   bool signaled_stop_ = false;
   bool can_be_terminated_ = false;
+  bool loop_is_running_ = false;
 };
 
 Worker::WorkerScope::WorkerScope(Worker* w)
@@ -337,9 +338,18 @@ void Worker::RunLoop(uv_run_mode mode) {
         String::NewFromUtf8Literal(isolate_, "Worker has been stopped")));
     return;
   }
+  if (loop_is_running_) {
+    isolate_->ThrowException(Exception::Error(
+        String::NewFromUtf8Literal(isolate_, "Cannot nest calls to runLoop")));
+    return;
+  }
   WorkerScope worker_scope(this);
+  TryCatch try_catch(isolate_);
+  try_catch.SetVerbose(true);
   SealHandleScope seal_handle_scope(isolate_);
+  loop_is_running_ = true;
   uv_run(&loop_, mode);
+  loop_is_running_ = false;
   if (signaled_stop_) {
     isolate_->CancelTerminateExecution();
   }
