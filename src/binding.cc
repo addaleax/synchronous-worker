@@ -1,3 +1,4 @@
+#define _GLIBCXX_USE_CXX11_ABI 0 // Node.js published binary compatibility
 #include "node.h"
 #include "uv.h"
 

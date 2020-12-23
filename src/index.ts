@@ -17,8 +17,8 @@ const kPromiseInspector = Symbol('kPromiseInspector');
 const kStoppedPromise = Symbol('kStoppedPromise');
 
 interface Options {
-  ownEventLoop: boolean;
-  ownMicrotaskQueue: boolean;
+  sharedEventLoop: boolean;
+  sharedMicrotaskQueue: boolean;
 }
 
 type InspectedPromise<T> = {
@@ -44,8 +44,8 @@ class SynchronousWorker extends EventEmitter {
 
   constructor(options?: Partial<Options>) {
     super();
-    this[kHasOwnEventLoop] = !!(options?.ownEventLoop);
-    this[kHasOwnMicrotaskQueue] = !!(options?.ownMicrotaskQueue);
+    this[kHasOwnEventLoop] = !(options?.sharedEventLoop);
+    this[kHasOwnMicrotaskQueue] = !(options?.sharedMicrotaskQueue);
 
     this[kHandle] = new SynchronousWorkerImpl();
     this[kHandle].onexit = (code) => {

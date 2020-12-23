@@ -3,7 +3,7 @@ import SynchronousWorker from '../';
 
 describe('SynchronousWorker allows running Node.js code', () => {
   it('inside its own event loop', () => {
-    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    const w = new SynchronousWorker();
     w.runInCallbackScope(() => {
       const req = w.createRequire(__filename);
       const fetch = req('node-fetch');
@@ -29,7 +29,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   it('with its own µtask queue', () => {
-    const w = new SynchronousWorker({ ownMicrotaskQueue: true });
+    const w = new SynchronousWorker({ sharedEventLoop: true });
     let ran = false;
     w.runInCallbackScope(() => {
       w.globalThis.queueMicrotask(() => ran = true);
@@ -38,7 +38,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   it('with its own µtask queue but shared event loop', (done) => {
-    const w = new SynchronousWorker({ ownMicrotaskQueue: true });
+    const w = new SynchronousWorker({ sharedEventLoop: true });
     let ran = false;
     w.runInCallbackScope(() => {
       w.globalThis.setImmediate(() => {
@@ -53,7 +53,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   it('with its own loop but shared µtask queue', () => {
-    const w = new SynchronousWorker({ ownEventLoop: true });
+    const w = new SynchronousWorker({ sharedMicrotaskQueue: true });
     let ran = false;
     w.runInCallbackScope(() => {
       w.globalThis.setImmediate(() => {
@@ -67,7 +67,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   it('with its own loop but shared µtask queue (no callback scope)', (done) => {
-    const w = new SynchronousWorker({ ownEventLoop: true });
+    const w = new SynchronousWorker({ sharedMicrotaskQueue: true });
     let ran = false;
     w.globalThis.queueMicrotask(() => ran = true);
     assert.strictEqual(ran, false);
@@ -78,7 +78,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   it('allows waiting for a specific promise to be resolved', () => {
-    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    const w = new SynchronousWorker();
     const req = w.createRequire(__filename);
     let srv;
     let serverUpPromise;
@@ -98,7 +98,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
 
   context('process.exit', () => {
     it('interrupts runInCallbackScope', () => {
-      const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+      const w = new SynchronousWorker();
       let ranBefore = false;
       let ranAfter = false;
       let observedCode = -1;
@@ -114,7 +114,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
     });
 
     it('interrupts runLoop', () => {
-      const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+      const w = new SynchronousWorker();
       let ranBefore = false;
       let ranAfter = false;
       let observedCode = -1;
@@ -133,7 +133,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
     });
 
     it('does not kill the process outside of any scopes', () => {
-      const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+      const w = new SynchronousWorker();
       let observedCode = -1;
 
       w.on('exit', (code) => observedCode = code);
@@ -148,7 +148,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   it('allows adding uncaught exception listeners', () => {
-    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    const w = new SynchronousWorker();
     let uncaughtException;
     let erroredOrExited = false;
     w.on('exit', () => erroredOrExited = true);
@@ -161,7 +161,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   it('handles entirely uncaught exceptions inside the loop well', () => {
-    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    const w = new SynchronousWorker();
     let observedCode;
     let observedError;
     w.on('exit', code => observedCode = code);
@@ -173,7 +173,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   it('forbids nesting .runLoop() calls', () => {
-    const w = new SynchronousWorker({ ownEventLoop: true, ownMicrotaskQueue: true });
+    const w = new SynchronousWorker();
     let uncaughtException;
     w.process.on('uncaughtException', err => uncaughtException = err);
     w.globalThis.setImmediate(() => w.runLoop('default'));
