@@ -4,7 +4,7 @@ import SynchronousWorker from '../';
 describe('SynchronousWorker allows running Node.js code', () => {
   it('inside its own event loop', () => {
     const w = new SynchronousWorker();
-    w.runInCallbackScope(() => {
+    w.runInWorkerScope(() => {
       const req = w.createRequire(__filename);
       const fetch = req('node-fetch');
       const httpServer = req('http').createServer((req, res) => {
@@ -31,7 +31,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   it('with its own µtask queue', () => {
     const w = new SynchronousWorker({ sharedEventLoop: true });
     let ran = false;
-    w.runInCallbackScope(() => {
+    w.runInWorkerScope(() => {
       w.globalThis.queueMicrotask(() => ran = true);
     });
     assert.strictEqual(ran, true);
@@ -40,7 +40,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   it('with its own µtask queue but shared event loop', (done) => {
     const w = new SynchronousWorker({ sharedEventLoop: true });
     let ran = false;
-    w.runInCallbackScope(() => {
+    w.runInWorkerScope(() => {
       w.globalThis.setImmediate(() => {
         w.globalThis.queueMicrotask(() => ran = true);
       });
@@ -55,7 +55,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
   it('with its own loop but shared µtask queue', () => {
     const w = new SynchronousWorker({ sharedMicrotaskQueue: true });
     let ran = false;
-    w.runInCallbackScope(() => {
+    w.runInWorkerScope(() => {
       w.globalThis.setImmediate(() => {
         w.globalThis.queueMicrotask(() => ran = true);
       });
@@ -83,12 +83,12 @@ describe('SynchronousWorker allows running Node.js code', () => {
     let srv;
     let serverUpPromise;
     let fetchPromise;
-    w.runInCallbackScope(() => {
+    w.runInWorkerScope(() => {
       srv = req('http').createServer((req, res) => res.end('contents')).listen(0);
       serverUpPromise = req('events').once(srv, 'listening');
     });
     w.runLoopUntilPromiseResolved(serverUpPromise);
-    w.runInCallbackScope(() => {
+    w.runInWorkerScope(() => {
       fetchPromise = req('node-fetch')('http://localhost:' + srv.address().port);
     });
     const fetched = w.runLoopUntilPromiseResolved(fetchPromise) as any;
@@ -97,13 +97,13 @@ describe('SynchronousWorker allows running Node.js code', () => {
   });
 
   context('process.exit', () => {
-    it('interrupts runInCallbackScope', () => {
+    it('interrupts runInWorkerScope', () => {
       const w = new SynchronousWorker();
       let ranBefore = false;
       let ranAfter = false;
       let observedCode = -1;
       w.on('exit', (code) => observedCode = code);
-      w.runInCallbackScope(() => {
+      w.runInWorkerScope(() => {
         ranBefore = true;
         w.process.exit(1);
         ranAfter = true;
@@ -119,7 +119,7 @@ describe('SynchronousWorker allows running Node.js code', () => {
       let ranAfter = false;
       let observedCode = -1;
       w.on('exit', (code) => observedCode = code);
-      w.runInCallbackScope(() => {
+      w.runInWorkerScope(() => {
         w.globalThis.setImmediate(() => {
           ranBefore = true;
           w.process.exit(1);

@@ -2,7 +2,7 @@
 
 ## Required Node.js PRs
 
-Unreleased:
+Released in 15.5.0:
 
 - https://github.com/nodejs/node/pull/36581
 - https://github.com/nodejs/node/pull/36482

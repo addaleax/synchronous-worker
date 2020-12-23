@@ -103,7 +103,7 @@ class SynchronousWorker extends EventEmitter {
       return obj;
     })`);
     const inspected = this[kPromiseInspector](promise);
-    this[kHandle].runInCallbackScope(() => {}); // Flush the µtask queue
+    this.runInWorkerScope(() => {}); // Flush the µtask queue
     while (inspected.state === 'pending') {
       this.runLoop('once');
     }
@@ -142,7 +142,7 @@ class SynchronousWorker extends EventEmitter {
     return this[kModule].createRequire(...args);
   }
 
-  runInCallbackScope(method: () => any): any {
+  runInWorkerScope(method: () => any): any {
     return this[kHandle].runInCallbackScope(method);
   }
 }
