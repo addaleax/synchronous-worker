@@ -80,7 +80,7 @@ class SynchronousWorker extends EventEmitter {
     }
   }
 
-  runLoop(mode: 'default' | 'once' | 'nowait'): void {
+  runLoop(mode: 'default' | 'once' | 'nowait' = 'default'): void {
     if (!this[kHasOwnEventLoop]) {
       throw new Error('Can only use .runLoop() when using a separate event loop');
     }

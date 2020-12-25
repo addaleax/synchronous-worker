@@ -1,7 +1,7 @@
 {
   "name": "synchronous-worker",
   "version": "1.0.0",
-  "description": "Node.js Workers, except on the same thread",
+  "description": "Run Node.js APIs synchronously",
   "main": "lib/index.js",
   "exports": {
     "require": "./lib/index.js",
