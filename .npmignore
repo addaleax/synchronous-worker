@@ -1,7 +1,0 @@
-src/
-test/
-.nyc_output/
-.github/
-tsconfig.json
-.eslintrc
-build/
