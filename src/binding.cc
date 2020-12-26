@@ -1,4 +1,10 @@
-#define _GLIBCXX_USE_CXX11_ABI 0 // Node.js published binary compatibility
+// Node.js published binary compatibility
+#ifdef __arm__
+#define _GLIBCXX_USE_CXX11_ABI 1
+#else
+#define _GLIBCXX_USE_CXX11_ABI 0
+#endif
+
 #include "node.h"
 #include "uv.h"
 
