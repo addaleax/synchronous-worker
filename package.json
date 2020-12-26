@@ -1,6 +1,6 @@
 {
   "name": "synchronous-worker",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Run Node.js APIs synchronously",
   "main": "lib/index.js",
   "exports": {
