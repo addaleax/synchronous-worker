@@ -228,7 +228,7 @@ void Worker::Start(bool own_loop, bool own_microtaskqueue) {
       DeserializeInternalFieldsCallback() /* internal_fields_deserializer */,
       microtask_queue);
   context->SetSecurityToken(outer_context->GetSecurityToken());
-  if (context.IsEmpty() || !InitializeContext(context)) {
+  if (context.IsEmpty() || InitializeContext(context).IsNothing()) {
     return;
   }
 
