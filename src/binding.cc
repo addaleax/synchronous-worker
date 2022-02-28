@@ -228,7 +228,13 @@ void Worker::Start(bool own_loop, bool own_microtaskqueue) {
       DeserializeInternalFieldsCallback() /* internal_fields_deserializer */,
       microtask_queue);
   context->SetSecurityToken(outer_context->GetSecurityToken());
-  if (context.IsEmpty() || InitializeContext(context).IsNothing()) {
+  if (context.IsEmpty() ||
+#if NODE_MAJOR_VERSION < 17
+  !InitializeContext(context)
+#else
+  !InitializeContext(context).FromMaybe(false)
+#endif
+  ) {
     return;
   }
 
