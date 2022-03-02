@@ -121,11 +121,15 @@ class SynchronousWorker extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    return this[kStoppedPromise] ??= new Promise(resolve => {
+    return this[kStoppedPromise] ??= new Promise((resolve, reject) => {
       this[kHandle].signalStop();
       setImmediate(() => {
-        this[kHandle].stop();
-        resolve();
+        try {
+          this[kHandle].stop();
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
       });
     });
   }
