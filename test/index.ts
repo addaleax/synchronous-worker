@@ -180,4 +180,18 @@ describe('SynchronousWorker allows running Node.js code', () => {
     w.runLoop('default');
     assert.strictEqual(uncaughtException.message, 'Cannot nest calls to runLoop');
   });
+
+  it('properly handles timers that are about to expire when FreeEnvironment() is called on a shared event loop', async() => {
+    const w = new SynchronousWorker({
+      sharedEventLoop: true,
+      sharedMicrotaskQueue: true
+    });
+
+    setImmediate(() => {
+      setTimeout(() => {}, 20);
+      const now = Date.now();
+      while (Date.now() - now < 30);
+    });
+    await w.stop();
+  });
 });
