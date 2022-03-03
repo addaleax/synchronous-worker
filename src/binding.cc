@@ -1,4 +1,5 @@
 // Node.js published binary compatibility
+#undef _GLIBCXX_USE_CXX11_ABI
 #ifdef __arm__
 #define _GLIBCXX_USE_CXX11_ABI 1
 #else
@@ -289,6 +290,15 @@ void Worker::SignalStop() {
 }
 
 void Worker::Stop(bool may_throw) {
+  if (loop_.data == nullptr) {
+    // If running in shared-event-loop mode, spin the outer event loop
+    // until all currently pending items have been addressed, so that
+    // FreeEnvironment() does not run the outer loop's handles.
+    TryCatch try_catch(isolate_);
+    try_catch.SetVerbose(true);
+    SealHandleScope seal_handle_scope(isolate_);
+    uv_run(GetCurrentEventLoop(isolate_), UV_RUN_NOWAIT);
+  }
   if (env_ != nullptr) {
     if (!signaled_stop_) {
       SignalStop();
