@@ -1,6 +1,8 @@
+#include "node_version.h"
+
 // Node.js published binary compatibility
 #undef _GLIBCXX_USE_CXX11_ABI
-#ifdef __arm__
+#if defined(__arm__) || NODE_VERSION_AT_LEAST(18, 0, 0)
 #define _GLIBCXX_USE_CXX11_ABI 1
 #else
 #define _GLIBCXX_USE_CXX11_ABI 0
