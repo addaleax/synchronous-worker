@@ -194,4 +194,18 @@ describe('SynchronousWorker allows running Node.js code', () => {
     });
     await w.stop();
   });
+
+  it('properly handles immediates when FreeEnvironment() is called on a shared event loop', async() => {
+    const w = new SynchronousWorker({
+      sharedEventLoop: true,
+      sharedMicrotaskQueue: true
+    });
+
+    setImmediate(() => {
+      setImmediate(() => {
+        setImmediate(() => {});
+      });
+    });
+    await w.stop();
+  });
 });
