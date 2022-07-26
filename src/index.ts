@@ -1,6 +1,7 @@
 import bindings from 'bindings';
 import { EventEmitter } from 'events';
 import type Module from 'module';
+import fs from 'fs';
 const {
   SynchronousWorkerImpl,
   UV_RUN_DEFAULT,
@@ -123,7 +124,7 @@ class SynchronousWorker extends EventEmitter {
   async stop(): Promise<void> {
     return this[kStoppedPromise] ??= new Promise(resolve => {
       this[kHandle].signalStop();
-      setImmediate(() => {
+      fs.readFile(__filename, () => {
         this[kHandle].stop();
         resolve();
       });
