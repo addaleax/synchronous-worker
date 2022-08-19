@@ -5,7 +5,8 @@ const {
   SynchronousWorkerImpl,
   UV_RUN_DEFAULT,
   UV_RUN_ONCE,
-  UV_RUN_NOWAIT
+  UV_RUN_NOWAIT,
+  standaloneSetImmediate
 } = bindings('synchronous_worker');
 const kHandle = Symbol('kHandle');
 const kProcess = Symbol('kProcess');
@@ -123,7 +124,7 @@ class SynchronousWorker extends EventEmitter {
   async stop(): Promise<void> {
     return this[kStoppedPromise] ??= new Promise(resolve => {
       this[kHandle].signalStop();
-      setImmediate(() => {
+      standaloneSetImmediate(() => {
         this[kHandle].stop();
         resolve();
       });
