@@ -12,7 +12,7 @@
   },
   "scripts": {
     "lint": "eslint {src,test}/**/*.ts",
-    "test": "npm run lint && npm run build && nyc npm run test-only",
+    "test": "npm run lint && npm run build && npm run test-only",
     "test-nolint": "npm run build && npm run test-only",
     "test-only": "mocha --trace-uncaught --colors -r ts-node/register test/*.ts",
     "build": "node-gyp rebuild && npm run compile-ts && gen-esm-wrapper . ./.esm-wrapper.mjs",
